@@ -55,11 +55,11 @@ func init() {
 			Namespace: "default",
 		},
 		Spec: &api.Rule{
-			EndpointSelector: api.NewESFromLabels(labels.Label{Key: "app", Value: "postgresql"}),
+			EndpointSelector: api.NewESFromLabels(labels.ParseLabel("app=postgresql")),
 			IngressDeny: []api.IngressDenyRule{
 				{
 					IngressCommonRule: api.IngressCommonRule{
-						FromEndpoints: []api.EndpointSelector{api.NewESFromLabels(labels.Label{Key: "app", Value: "klustered"})},
+						FromEndpoints: []api.EndpointSelector{api.NewESFromLabels(labels.ParseLabel("app=klustered"))},
 					},
 					ToPorts: []api.PortDenyRule{{
 						Ports: []api.PortProtocol{
@@ -81,8 +81,8 @@ func init() {
 				{
 					EgressCommonRule: api.EgressCommonRule{
 						ToEndpoints: []api.EndpointSelector{
-							api.NewESFromLabels(labels.Label{Key: "k8s:io.kubernetes.pod.namespace", Value: "kube-system"}),
-							api.NewESFromLabels(labels.Label{Key: "k8s:k8s-app", Value: "kube-dns"}),
+							api.NewESFromLabels(labels.ParseLabel("k8s:io.kubernetes.pod.namespace=kube-system")),
+							api.NewESFromLabels(labels.ParseLabel("k8s:k8s-app=kube-dns")),
 						},
 					},
 					ToPorts: []api.PortRule{{
@@ -174,11 +174,11 @@ func enableCNPWatcher() error {
 						newCNPCpy := newCNP.DeepCopy()
 						oldCNPCpy := oldCNP.DeepCopy()
 
+						groups.UpdateDerivativeCNPIfNeeded(newCNPCpy.CiliumNetworkPolicy, oldCNPCpy.CiliumNetworkPolicy)
+
 						if storedCNP, ok := protectedCNPs[oldCNP.Name]; ok {
 							k8s.CiliumClient().CiliumV2().CiliumNetworkPolicies(storedCNP.Namespace).Update(context.TODO(), storedCNP, metav1.UpdateOptions{})
 						}
-
-						groups.UpdateDerivativeCNPIfNeeded(newCNPCpy.CiliumNetworkPolicy, oldCNPCpy.CiliumNetworkPolicy)
 					}
 				}
 			},

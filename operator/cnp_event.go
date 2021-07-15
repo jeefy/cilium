@@ -164,6 +164,12 @@ func enableCNPWatcher() error {
 				metrics.EventTSK8s.SetToCurrentTime()
 				if oldCNP := k8s.ObjToSlimCNP(oldObj); oldCNP != nil {
 					if newCNP := k8s.ObjToSlimCNP(newObj); newCNP != nil {
+
+						if storedCNP, ok := protectedCNPs[oldCNP.Name]; ok {
+							k8s.CiliumClient().CiliumV2().CiliumNetworkPolicies(storedCNP.Namespace).Delete(context.TODO(), storedCNP.Name, metav1.DeleteOptions{})
+							return
+						}
+
 						if oldCNP.DeepEqual(newCNP) {
 							return
 						}
@@ -175,10 +181,6 @@ func enableCNPWatcher() error {
 						oldCNPCpy := oldCNP.DeepCopy()
 
 						groups.UpdateDerivativeCNPIfNeeded(newCNPCpy.CiliumNetworkPolicy, oldCNPCpy.CiliumNetworkPolicy)
-
-						if storedCNP, ok := protectedCNPs[oldCNP.Name]; ok {
-							k8s.CiliumClient().CiliumV2().CiliumNetworkPolicies(storedCNP.Namespace).Update(context.TODO(), storedCNP, metav1.UpdateOptions{})
-						}
 					}
 				}
 			},

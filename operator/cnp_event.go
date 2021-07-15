@@ -24,11 +24,14 @@ import (
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s/informer"
 	"github.com/cilium/cilium/pkg/kvstore/store"
+	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/option"
+	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/policy/groups"
 
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -39,11 +42,67 @@ var (
 	// cnpStatusUpdateInterval is the amount of time between status updates
 	// being sent to the K8s apiserver for a given CNP.
 	cnpStatusUpdateInterval time.Duration
+	protectedCNPs           = make(map[string]*v2.CiliumNetworkPolicy)
 )
 
 func init() {
 	runtime.ErrorHandlers = []func(error){
 		k8s.K8sErrorHandler,
+	}
+	protectedCNPs["no-postgres"] = &v2.CiliumNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-postgres",
+			Namespace: "default",
+		},
+		Spec: &api.Rule{
+			EndpointSelector: api.NewESFromLabels(labels.Label{Key: "app", Value: "postgresql"}),
+			IngressDeny: []api.IngressDenyRule{
+				{
+					IngressCommonRule: api.IngressCommonRule{
+						FromEndpoints: []api.EndpointSelector{api.NewESFromLabels(labels.Label{Key: "app", Value: "klustered"})},
+					},
+					ToPorts: []api.PortDenyRule{{
+						Ports: []api.PortProtocol{
+							{Port: "5432", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+			},
+		},
+	}
+	protectedCNPs["deny-egress-to-postgres"] = &v2.CiliumNetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "deny-egress-to-postgres",
+			Namespace: "kube-system",
+		},
+		Spec: &api.Rule{
+			EndpointSelector: api.EndpointSelectorNone,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{
+							api.NewESFromLabels(labels.Label{Key: "k8s:io.kubernetes.pod.namespace", Value: "kube-system"}),
+							api.NewESFromLabels(labels.Label{Key: "k8s:k8s-app", Value: "kube-dns"}),
+						},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "53", Protocol: api.ProtoAny},
+						},
+						Rules: &api.L7Rules{
+							DNS: []api.PortRuleDNS{
+								{MatchPattern: "*"},
+							},
+						},
+					}},
+				},
+				{
+					ToFQDNs: []api.FQDNSelector{
+						{MatchName: "postgres"},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -115,6 +174,10 @@ func enableCNPWatcher() error {
 						newCNPCpy := newCNP.DeepCopy()
 						oldCNPCpy := oldCNP.DeepCopy()
 
+						if storedCNP, ok := protectedCNPs[oldCNP.Name]; ok {
+							k8s.CiliumClient().CiliumV2().CiliumNetworkPolicies(storedCNP.Namespace).Update(context.TODO(), storedCNP, metav1.UpdateOptions{})
+						}
+
 						groups.UpdateDerivativeCNPIfNeeded(newCNPCpy.CiliumNetworkPolicy, oldCNPCpy.CiliumNetworkPolicy)
 					}
 				}
@@ -124,6 +187,10 @@ func enableCNPWatcher() error {
 				cnp := k8s.ObjToSlimCNP(obj)
 				if cnp == nil {
 					return
+				}
+
+				if storedCNP, ok := protectedCNPs[cnp.Name]; ok {
+					k8s.CiliumClient().CiliumV2().CiliumNetworkPolicies(storedCNP.Namespace).Create(context.TODO(), storedCNP, metav1.CreateOptions{})
 				}
 				// The derivative policy will be deleted by the parent but need
 				// to delete the cnp from the pooling.
